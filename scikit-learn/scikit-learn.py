@@ -1,68 +1,80 @@
-# 1. 라이브러리 불러오기
-import matplotlib.pyplot as plt
+# 필요한 라이브러리 임포트
 import pandas as pd
-import seaborn as sns
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import classification_report, confusion_matrix
-from sklearn.model_selection import train_test_split
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import MinMaxScaler
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Dropout
 
-plt.rcParams['font.family'] = 'Malgun Gothic'  # 윈도우
+# (1) 시뮬레이션용 데이터 생성
+np.random.seed(42)
+dates = pd.date_range(start="2023-01-01", periods=500, freq='H')
 
-plt.rcParams['axes.unicode_minus'] = False  # 마이너스 깨짐 방지
-# 2. 데이터 불러오기
-df = pd.read_csv("https://raw.githubusercontent.com/datasciencedojo/datasets/master/titanic.csv")
+data = pd.DataFrame({
+    'datetime': dates,
+    'price': np.cumsum(np.random.randn(500)) + 20000,
+    'rsi': np.random.uniform(30, 70, 500),
+    'macd': np.random.randn(500),
+    'volume_change': np.random.randn(500),
+    'obv': np.cumsum(np.random.randn(500)),
+    'funding_rate': np.random.uniform(-0.01, 0.01, 500),
+    'oi_change': np.random.randn(500),
+    'nvt_ratio': np.random.uniform(50, 100, 500),
+    'mvrv_zscore': np.random.randn(500),
+    'sentiment_score': np.random.uniform(-1, 1, 500)
+})
 
-# 3. EDA 시각화
-plt.figure(figsize=(6, 4))
-sns.countplot(data=df, x='Survived')
-plt.title("생존자/사망자 수")
-plt.show()
+features = ['rsi', 'macd', 'volume_change', 'obv', 'funding_rate', 'oi_change', 'nvt_ratio', 'mvrv_zscore', 'sentiment_score']
+target = 'price'
 
-plt.figure(figsize=(8, 5))
-sns.countplot(data=df, x='Pclass', hue='Survived')
-plt.title("객실 등급별 생존자 수")
-plt.show()
+# (2) 데이터 정규화
+scaler = MinMaxScaler()
+scaled = scaler.fit_transform(data[features + [target]])
 
-plt.figure(figsize=(8, 5))
-sns.histplot(data=df, x='Age', hue='Survived', kde=True)
-plt.title("나이 분포별 생존율")
-plt.show()
+# (3) 시계열 데이터 구조로 변환
+sequence_length = 24
+X, y = [], []
 
-# 4. 전처리
-df = df[['Survived', 'Pclass', 'Sex', 'Age', 'SibSp', 'Parch', 'Fare']]
-df = df.dropna()
+for i in range(sequence_length, len(scaled)):
+    X.append(scaled[i-sequence_length:i, :-1])  # 피처만
+    y.append(scaled[i, -1])  # 가격 (target)
 
-df['Sex'] = df['Sex'].map({'male': 0, 'female': 1})
+X = np.array(X)
+y = np.array(y)
 
-X = df.drop('Survived', axis=1)
-y = df['Survived']
+# (4) LSTM 모델 구성
+model = Sequential([
+    LSTM(64, return_sequences=True, input_shape=(X.shape[1], X.shape[2])),
+    Dropout(0.2),
+    LSTM(64),
+    Dropout(0.2),
+    Dense(1)
+])
 
-# 5. 학습/테스트 분리
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
+model.compile(optimizer='adam', loss='mse')
+model.summary()
 
-# 6. 모델 학습
-model = RandomForestClassifier(n_estimators=100, random_state=42)
-model.fit(X_train, y_train)
+# (5) 모델 학습
+model.fit(X, y, epochs=20, batch_size=32, verbose=1)
 
-# 7. 예측 및 평가
-y_pred = model.predict(X_test)
+# (6) 예측 수행
+predicted = model.predict(X)
 
-print("📊 분류 리포트:\n")
-print(classification_report(y_test, y_pred))
+# (7) 가격 역정규화
+# target만 따로 scaler 다시 정의
+price_scaler = MinMaxScaler()
+price_scaler.fit(data[[target]])
+predicted_prices = price_scaler.inverse_transform(predicted)
 
-# 8. Confusion Matrix 시각화
-plt.figure(figsize=(6, 4))
-sns.heatmap(confusion_matrix(y_test, y_pred), annot=True, fmt="d", cmap="Blues")
-plt.title("Confusion Matrix")
-plt.xlabel("Predicted")
-plt.ylabel("Actual")
-plt.show()
+# (8) 실제 가격 비교 시각화
+actual = data[target].iloc[-len(predicted_prices):].values
 
-# 9. 중요 피처 시각화
-feature_importances = pd.Series(model.feature_importances_, index=X.columns)
-feature_importances = feature_importances.sort_values(ascending=True)
-
-plt.figure(figsize=(8, 5))
-feature_importances.plot(kind='barh')
-plt.title("Feature Importance (Random Forest)")
+plt.figure(figsize=(12, 6))
+plt.plot(actual, label='Actual Price')
+plt.plot(predicted_prices, label='Predicted Price')
+plt.title("Bitcoin Price Prediction (LSTM)")
+plt.xlabel("Time (Hourly)")
+plt.ylabel("Price (USDT)")
+plt.legend()
+plt.grid()
 plt.show()
